@@ -3,10 +3,10 @@ name: Publish
 # Publishing is driven by a version tag, so the released artifact is always
 # traceable to a commit. `npm version` creates the tag; pushing it ships.
 #
-# If no NPM_TOKEN is set, the tag is still built and verified and the run stays
-# GREEN — it reports that it skipped the registry. A workflow that goes red
-# because a secret is absent teaches everyone to ignore this workflow, and the
-# next thing it ignores will be a real failure.
+# Auth is npm Trusted Publishing (OIDC): npmjs.com trusts exactly THIS
+# workflow in THIS repo (configured 2026-09-05). No token exists anywhere —
+# nothing to store, leak, or rotate — and provenance is attested on the
+# registry. `npm publish` (npm >= 11.5) exchanges the id-token itself.
 on:
   push:
     tags: ["v*"]
@@ -16,8 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # Required for npm provenance — proves on the registry that this tarball
-      # was built by this workflow from this commit.
+      # The OIDC token IS the publish credential.
       id-token: write
     steps:
       - uses: actions/checkout@v4
@@ -46,28 +45,8 @@ jobs:
             exit 1
           fi
 
-      # A missing token SKIPS and says so in the summary — the tag, the build
-      # and `verify` all still ran, so the release is real and reproducible;
-      # it just did not reach the public registry.
-      - name: Is a registry credential available?
-        id: cred
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -n "${NPM_TOKEN:-}" ]; then
-            echo "have=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "have=false" >> "$GITHUB_OUTPUT"
-            {
-              echo '## Publish skipped'
-              echo
-              echo "Tag \`${GITHUB_REF_NAME}\` was built and verified, but no \`NPM_TOKEN\`"
-              echo 'secret is set on this repository, so it was not pushed to npm.'
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Publish to npm
-        if: steps.cred.outputs.have == 'true'
-        run: pnpm publish --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # npm (not pnpm) does the publish: the npm CLI implements the OIDC
+      # token exchange for trusted publishing natively. dist/ is already
+      # built by `verify`.
+      - name: Publish to npm (OIDC, tokenless)
+        run: npm publish

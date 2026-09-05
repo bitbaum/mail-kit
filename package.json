@@ -1,6 +1,6 @@
 {
   "name": "@bitbaum/mail-kit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The fleet's one email layer: Resend over raw fetch, zero dependencies, honest never-throwing results, sandbox/placeholder guards, and the shared-sender convention encoded once.",
   "license": "MIT",
   "author": "Mao Nakamoto",

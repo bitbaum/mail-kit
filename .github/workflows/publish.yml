@@ -1,0 +1,73 @@
+name: Publish
+
+# Publishing is driven by a version tag, so the released artifact is always
+# traceable to a commit. `npm version` creates the tag; pushing it ships.
+#
+# If no NPM_TOKEN is set, the tag is still built and verified and the run stays
+# GREEN — it reports that it skipped the registry. A workflow that goes red
+# because a secret is absent teaches everyone to ignore this workflow, and the
+# next thing it ignores will be a real failure.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for npm provenance — proves on the registry that this tarball
+      # was built by this workflow from this commit.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          registry-url: "https://registry.npmjs.org"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Never publish something that would not have passed CI.
+      - run: pnpm run verify
+
+      # Refuse to publish a tag whose version does not match package.json,
+      # rather than silently shipping the wrong number.
+      - name: Check tag matches package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$tag" != "$pkg" ]; then
+            echo "Tag v$tag does not match package.json version $pkg" >&2
+            exit 1
+          fi
+
+      # A missing token SKIPS and says so in the summary — the tag, the build
+      # and `verify` all still ran, so the release is real and reproducible;
+      # it just did not reach the public registry.
+      - name: Is a registry credential available?
+        id: cred
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            echo "have=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have=false" >> "$GITHUB_OUTPUT"
+            {
+              echo '## Publish skipped'
+              echo
+              echo "Tag \`${GITHUB_REF_NAME}\` was built and verified, but no \`NPM_TOKEN\`"
+              echo 'secret is set on this repository, so it was not pushed to npm.'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Publish to npm
+        if: steps.cred.outputs.have == 'true'
+        run: pnpm publish --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

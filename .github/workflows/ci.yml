@@ -1,0 +1,36 @@
+# Golden CI floor — see dotfiles/templates/ci/README.md.
+# mail-kit: pnpm + vitest, zero runtime deps. `verify` (format + lint +
+# typecheck + build + test) is the SSOT for "green", defined once in
+# package.json and run identically here and locally.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify
+        run: pnpm run verify

@@ -1,0 +1,37 @@
+# Auto-merge — nobody is in the merge loop.
+#
+# Green, ready PRs merge themselves. The policy lives in ONE place for the
+# whole fleet — bitbaum/fleet, scripts/ci/auto-merge-sweep.sh — and this file
+# only says "run it, with these settings".
+#
+# The triggers stay here because they are genuinely per-repo: workflow_run
+# must name the CI workflow exactly.
+#
+# To stop all of this: delete this file, or add a `hold` label to a PR.
+name: Auto-merge
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+# Declared on the CALLER as well as inside the reusable workflow: a called
+# workflow's token is capped by what the caller grants.
+permissions:
+  contents: write # merge the PR
+  pull-requests: write # read PR state, delete the branch
+  actions: write # dispatch the re-arm workflows
+  checks: read # statusCheckRollup — only load-bearing on private repos
+  statuses: read
+
+jobs:
+  sweep:
+    uses: bitbaum/fleet/.github/workflows/auto-merge-sweep.yml@main
+    with:
+      base_branch: main
+      ci_workflow: ci.yml
+      # SPACE-separated: the sweep word-splits this.
+      rearm_workflows: "ci.yml publish.yml"

@@ -36,17 +36,22 @@ jobs:
       # SPACE-separated: the sweep word-splits this.
       rearm_workflows: "ci.yml publish.yml"
     secrets:
-      # GITHUB_TOKEN cannot merge a PR that touches .github/workflows, so every
-      # Dependabot `github_actions` bump stalls forever: the sweep tries, the
-      # merge API refuses, it logs "leaving for the next sweep", and repeats —
-      # while still exiting 0. ai-kit #11 sat green for nine days that way, and
-      # aoz-housing #122 for nine more.
+      # Why a PAT and not the default token: THROUGHPUT.
       #
-      # A PAT also makes the queue drain at CI speed rather than at the
-      # schedule's. A dispatch made with GITHUB_TOKEN emits no workflow_run, so
-      # after each merge nothing wakes the sweep for the next PR until the cron
-      # fires — and GitHub throttles that to roughly hourly whatever the cron
-      # says. A PAT-created dispatch does emit it.
+      # A dispatch made with GITHUB_TOKEN triggers no workflows — the same rule
+      # that makes the deploy reconciler necessary. So after the sweep merges a
+      # PR and re-arms CI, that CI run's completion fires no workflow_run, and
+      # nothing wakes the sweep to take the next PR. It waits for the cron, and
+      # GitHub throttles scheduled workflows regardless of what the cron says:
+      # measured in fleetcrown, sweeps land 50-65 minutes apart against */10.
+      # A PAT-created dispatch does emit workflow_run, so a queue drains at CI
+      # speed instead.
+      #
+      # NOT the reason, though an earlier version of this comment said so:
+      # "GITHUB_TOKEN cannot merge a PR touching .github/workflows". That is
+      # contradicted here — github-actions[bot] merged datacat#253 and
+      # ai-kit#42, both of which change a workflow file. Recorded so the wrong
+      # reason does not get re-derived from this file.
       #
       # Undefined resolves to empty and the reusable workflow falls back to
       # github.token, so this line is inert until the org secret exists.

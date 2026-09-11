@@ -11,6 +11,17 @@ on:
   push:
     tags: ["v*"]
 
+# Publishing is idempotent: the job first asks the registry whether
+# package.json's version already exists and skips (green) if it does. A
+# re-pushed tag, a re-run, or two runs for the same version cannot paint a
+# spurious E403 red — a red run that means "nothing is wrong" trains everyone
+# to ignore the workflow (bip-kit 0.2.6 and 0.2.7, 2026-09-11). Runs are also
+# serialised so two cannot race past the check; never cancelled, because a
+# cancelled publish is a half-shipped release.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -29,14 +40,33 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
+      - name: Is this version already on the registry?
+        id: check
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "→ $name@$version is already published; nothing to do."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "✅ \`$name@$version\` is already published — nothing to do." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "→ $name@$version is not on the registry; releasing it."
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.check.outputs.publish == 'true'
+        run: pnpm install --frozen-lockfile
 
       # Never publish something that would not have passed CI.
-      - run: pnpm run verify
+      - if: steps.check.outputs.publish == 'true'
+        run: pnpm run verify
 
       # Refuse to publish a tag whose version does not match package.json,
       # rather than silently shipping the wrong number.
       - name: Check tag matches package version
+        if: steps.check.outputs.publish == 'true'
         run: |
           tag="${GITHUB_REF_NAME#v}"
           pkg=$(node -p "require('./package.json').version")
@@ -49,4 +79,19 @@ jobs:
       # token exchange for trusted publishing natively. dist/ is already
       # built by `verify`.
       - name: Publish to npm (OIDC, tokenless)
-        run: npm publish
+        if: steps.check.outputs.publish == 'true'
+        env:
+          NAME: ${{ steps.check.outputs.name }}
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          if npm publish; then
+            echo "🚀 Published \`$NAME@$VERSION\`." >> "$GITHUB_STEP_SUMMARY"
+          elif npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            # The check above and this publish are not atomic. If another run
+            # slipped between them, the version is on the registry — which is
+            # the goal state, not an error.
+            echo "→ $NAME@$VERSION was published by a concurrent run; nothing to do."
+            echo "✅ \`$NAME@$VERSION\` was published by a concurrent run — nothing to do." >> "$GITHUB_STEP_SUMMARY"
+          else
+            exit 1
+          fi

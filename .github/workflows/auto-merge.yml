@@ -43,7 +43,7 @@ jobs:
       # PR and re-arms CI, that CI run's completion fires no workflow_run, and
       # nothing wakes the sweep to take the next PR. It waits for the cron, and
       # GitHub throttles scheduled workflows regardless of what the cron says:
-      # measured in fleetcrown, sweeps land 50-65 minutes apart against */10.
+      # measured in loki, sweeps land 50-65 minutes apart against */10.
       # A PAT-created dispatch does emit workflow_run, so a queue drains at CI
       # speed instead.
       #

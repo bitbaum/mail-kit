@@ -55,7 +55,7 @@ if (!result.sent) {
 - The shared Resend account is on the **free tier**: 1 verified domain,
   **100 emails/day**, 3,000/month. Hitting the daily cap surfaces as
   `{ sent: false, status: 429, retryable: true }`.
-- Only `fleetcrown.orangecat.ch` is verified, so every app sends as
+- Only `loki.orangecat.ch` is verified, so every app sends as
   `<app>@fleetcrown.orangecat.ch` — `conventionalFrom("My App")` builds it.
 - A daily canary on the box sends one real email and alerts Telegram when it
   fails — that, not this package, is what proves delivery keeps working.

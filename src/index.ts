@@ -23,7 +23,7 @@
  * - RESEND_FROM     — sender, either `Name <addr>` or a bare address.
  *                     Optional when the app passes `from` per call.
  *
- * Fleet convention: only `loki.orangecat.ch` is verified in the shared
+ * Fleet convention: only `fleetcrown.orangecat.ch` is verified in the shared
  * Resend account (free tier = 1 domain, 100 emails/day, 3000/month), so every
  * app sends as `<app>@fleetcrown.orangecat.ch` — see `conventionalFrom()`.
  */
@@ -31,7 +31,11 @@
 const RESEND_API_URL = "https://api.resend.com";
 
 /** The shared account's single verified sender domain. */
-export const FLEET_SENDER_DOMAIN = "loki.orangecat.ch";
+// The Resend-verified sending domain. It still carries the old product name:
+// the product became Loki on 2026-09-14, but a sending domain is DNS + DKIM,
+// not a string — until loki.orangecat.ch is verified in Resend, mail from any
+// other domain is rejected. Do not "fix" this to match the product name.
+export const FLEET_SENDER_DOMAIN = "fleetcrown.orangecat.ch";
 
 /**
  * Resend's sandbox domain: mail "sends" fine but reaches ONLY the account

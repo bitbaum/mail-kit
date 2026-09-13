@@ -176,10 +176,10 @@ describe("sendMail", () => {
 
 describe("mailHealth", () => {
   it("reports domains on a valid key", async () => {
-    mockFetch(200, { data: [{ name: "loki.orangecat.ch", status: "verified" }] });
+    mockFetch(200, { data: [{ name: "fleetcrown.orangecat.ch", status: "verified" }] });
     expect(await mailHealth({ env: GOOD_ENV })).toEqual({
       ok: true,
-      domains: [{ name: "loki.orangecat.ch", status: "verified" }],
+      domains: [{ name: "fleetcrown.orangecat.ch", status: "verified" }],
     });
   });
 

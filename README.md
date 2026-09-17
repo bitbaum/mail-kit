@@ -66,3 +66,9 @@ if (!result.sent) {
 - Not a queue — `retryable` tells a caller *whether* a retry can help;
   scheduling one is the caller's decision.
 - Not for bulk — newsletters go through Listmonk.
+
+---
+
+Part of **[bitbaum](https://bitbaum.orangecat.ch)** — AI-native products on open
+infrastructure, built in Zürich. Every package here lists the apps that use it:
+**[which apps use mail-kit](https://bitbaum.orangecat.ch/packages/#mail-kit)**.

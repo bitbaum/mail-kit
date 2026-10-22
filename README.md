@@ -43,12 +43,49 @@ if (!result.sent) {
 - **`options.idempotencyKey`** — pass from crons/queues so a retried job
   cannot double-send (Resend dedupes for 24h).
 
+## One address per app: `hello@<host>`
+
+Every app has one address, on its own host, that a customer can guess:
+`hello@skif.orangecat.ch`, and `hello@murphys-bar.ch` once a site has its own
+domain. `appAddress(url)` builds it; `appAddressFromEnv()` reads `MAIL_ADDRESS`
+or derives it from `APP_URL` / `NEXT_PUBLIC_SITE_URL` / `AUTH_URL`.
+
+`sendMail` puts that address in **Reply-To** on every message (unless the call
+sets its own, or already sends from it). Mail still leaves through the shared
+sender until each host can sign its own — but every answer reaches the app.
+
+## Mail to an app
+
+The fleet's mail gateway receives for every app host, checks SPF/DKIM/DMARC,
+and POSTs an `InboundMail` to `/api/mail/inbound`, signed with
+`MAIL_INBOUND_SECRET` (`x-mail-signature: t=…,v1=hmac`). The app side is one
+line:
+
+```ts
+// app/api/mail/inbound/route.ts
+import { inboundHandler } from "@bitbaum/mail-kit";
+export const POST = inboundHandler({ onMail: (mail) => saveAndTriage(mail) });
+```
+
+Unsigned, tampered, stale (> 5 min) or oversized deliveries are refused before
+your code runs; a thrown `onMail` answers 500 so the gateway retries.
+
+## AI triage
+
+`triageMail(mail, complete, context)` asks a model (any `complete()` — the
+ai-forms / ai-kit shape) for `kind`, `urgency`, a one-line `summary`, the
+sender's `language` and `needsHuman`. It never throws: no model, or nonsense
+back, and the answer comes from plain rules, marked `by: "rules"`. Instructions
+inside an email are described, never followed.
+
 ## Env contract (the whole of it)
 
-| Var              | Meaning                                             |
-| ---------------- | --------------------------------------------------- |
-| `RESEND_API_KEY` | required to send                                    |
-| `RESEND_FROM`    | sender — `Name <addr>` or bare address (optional if every call passes `from`) |
+| Var                   | Meaning                                                                       |
+| --------------------- | ----------------------------------------------------------------------------- |
+| `RESEND_API_KEY`      | required to send (a fleet key: `/opt/fleet/env`)                              |
+| `RESEND_FROM`         | sender — `Name <addr>` or bare address (optional if every call passes `from`) |
+| `MAIL_ADDRESS`        | the app's own address; optional, derived from the app's URL                   |
+| `MAIL_INBOUND_SECRET` | verifies mail from the gateway (a fleet key: `/opt/fleet/env`)                |
 
 ## Fleet conventions
 

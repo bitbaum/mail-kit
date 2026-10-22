@@ -7,9 +7,16 @@ name: Publish
 # workflow in THIS repo (configured 2026-09-05). No token exists anywhere —
 # nothing to store, leak, or rotate — and provenance is attested on the
 # registry. `npm publish` (npm >= 11.5) exchanges the id-token itself.
+#
+# It can also be started by hand (Actions → Publish → Run workflow) on main:
+# then the version is package.json's, the npm provenance attestation names
+# the exact commit, and there is no tag to match. That path exists because
+# tags cannot always be pushed (an automated session's git proxy refuses
+# them), and "merged but never published" is how a fix reaches nobody.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch: {}
 
 # Publishing is idempotent: the job first asks the registry whether
 # package.json's version already exists and skips (green) if it does. A
@@ -66,7 +73,7 @@ jobs:
       # Refuse to publish a tag whose version does not match package.json,
       # rather than silently shipping the wrong number.
       - name: Check tag matches package version
-        if: steps.check.outputs.publish == 'true'
+        if: steps.check.outputs.publish == 'true' && github.event_name == 'push'
         run: |
           tag="${GITHUB_REF_NAME#v}"
           pkg=$(node -p "require('./package.json').version")

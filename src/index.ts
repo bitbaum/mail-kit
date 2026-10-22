@@ -19,14 +19,20 @@
  *   placeholder key delivers to nobody. Both shipped to production once.
  *
  * Env contract (the whole of it):
- * - RESEND_API_KEY  — required for sending.
- * - RESEND_FROM     — sender, either `Name <addr>` or a bare address.
- *                     Optional when the app passes `from` per call.
+ * - RESEND_API_KEY      — required for sending.
+ * - RESEND_FROM         — sender, either `Name <addr>` or a bare address.
+ *                         Optional when the app passes `from` per call.
+ * - MAIL_ADDRESS        — the app's own address, `hello@<host>` (address.ts).
+ *                         Optional: derived from APP_URL & co. when unset.
+ *                         Every message carries it as Reply-To.
+ * - MAIL_INBOUND_SECRET — verifies mail the gateway delivers (inbound.ts).
  *
  * Fleet convention: only `fleetcrown.orangecat.ch` is verified in the shared
  * Resend account (free tier = 1 domain, 100 emails/day, 3000/month), so every
  * app sends as `<app>@fleetcrown.orangecat.ch` — see `conventionalFrom()`.
  */
+
+import { appAddressFromEnv } from "./address.js";
 
 const RESEND_API_URL = "https://api.resend.com";
 
@@ -200,6 +206,11 @@ export async function sendMail(
     return { sent: false, error: "Message needs html and/or text", retryable: false };
   }
 
+  // Answers go to the app's own address (address.ts) unless the caller set
+  // one, or the message already comes from it.
+  const own = appAddressFromEnv(env);
+  const replyTo = message.replyTo ?? (own && bareAddress(from) !== own ? own : undefined);
+
   const body = {
     from,
     to: toArray(message.to),
@@ -208,7 +219,7 @@ export async function sendMail(
     ...(message.text ? { text: message.text } : {}),
     ...(message.cc ? { cc: toArray(message.cc) } : {}),
     ...(message.bcc ? { bcc: toArray(message.bcc) } : {}),
-    ...(message.replyTo ? { reply_to: message.replyTo } : {}),
+    ...(replyTo ? { reply_to: replyTo } : {}),
     ...(message.attachments?.length
       ? { attachments: message.attachments.map(encodeAttachment) }
       : {}),
@@ -291,3 +302,26 @@ export async function mailHealth(options: SendOptions = {}): Promise<MailHealth>
     domains: (payload.data ?? []).map((d) => ({ name: d.name ?? "?", status: d.status ?? "?" })),
   };
 }
+
+export { APP_MAILBOX, appAddress, appAddressFromEnv, hostOf, isAddressFor } from "./address.js";
+export {
+  INBOUND_PATH,
+  INBOUND_SIGNATURE_HEADER,
+  inboundHandler,
+  signInbound,
+  verifyInbound,
+  type AuthVerdict,
+  type InboundCheck,
+  type InboundMail,
+  type MailParty,
+} from "./inbound.js";
+export {
+  MAIL_KINDS,
+  MAIL_URGENCIES,
+  triageByRules,
+  triageMail,
+  type CompleteFn,
+  type MailKind,
+  type MailTriage,
+  type MailUrgency,
+} from "./triage.js";

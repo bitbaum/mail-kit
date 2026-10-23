@@ -46,8 +46,8 @@ if (!result.sent) {
 ## One address per app: `hello@<host>`
 
 Every app has one address, on its own host, that a customer can guess:
-`hello@skif.orangecat.ch`, and `hello@murphys-bar.ch` once a site has its own
-domain. `appAddress(url)` builds it; `appAddressFromEnv()` reads `MAIL_ADDRESS`
+`hello@<app>.orangecat.ch` on the box, and `hello@murphys-bar.ch` once a site
+has its own domain. `appAddress(url)` builds it; `appAddressFromEnv()` reads `MAIL_ADDRESS`
 or derives it from `APP_URL` / `NEXT_PUBLIC_SITE_URL` / `AUTH_URL`.
 
 `sendMail` puts that address in **Reply-To** on every message (unless the call

@@ -1,0 +1,206 @@
+# Release — a new version of this package, from one button.
+#
+# Rendered from bitbaum/fleet templates/package. Loki's package page starts it
+# ("Release vX.Y.Z"), and so can anyone from the Actions tab. It:
+#
+#   1. refuses unless main's CI is green on the exact commit it starts from,
+#   2. raises the version in package.json (the bump, or the exact version
+#      asked for) — `npm version --no-git-tag-version`, so npm makes no commit
+#      and no tag of its own,
+#   3. runs the package's own `verify`, which rebuilds the committed dist/,
+#   4. commits "release vX.Y.Z" with the rebuilt dist/, tags vX.Y.Z, and pushes
+#      both in one atomic push,
+#   5. creates a GitHub release with generated notes.
+#
+# Consumers pick the tag up through Dependabot (`github:bitbaum/mail-kit#vX.Y.Z`),
+# and publish.yml ships it to npm once npm publishing is switched on.
+#
+# WHY THE PUSH USES FLEET_PAT. A push made with GITHUB_TOKEN starts no workflow.
+# publish.yml listens for the tag push, and CI must run on the release commit
+# (the auto-merge sweep merges nothing onto a main whose CI it cannot see). So
+# the release commit and tag are pushed with FLEET_PAT, the org secret every
+# bitbaum repo already has (auto-merge.yml passes it to the sweep), and both
+# workflows fire exactly as they would for a person's push. Calling publish.yml
+# from here instead was the other option and is not the honest one: package
+# repos keep the publish.yml they were created with (the template sync adds
+# missing files and never rewrites one), so the tag push is the only path every
+# repo's publish.yml is guaranteed to answer. No FLEET_PAT → no release, said
+# plainly, rather than a tag that silently publishes nothing.
+#
+# If main is ever protected against direct pushes, FLEET_PAT's identity must be
+# allowed to bypass it, or this fails at the push — after verify, before any
+# tag exists, so nothing half-ships.
+name: Release
+run-name: Release ${{ inputs.version != '' && format('v{0}', inputs.version) || inputs.bump }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Which part of the version to raise (ignored when an exact version is given)
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      version:
+        description: Exact version to release, e.g. 0.3.0 (optional — wins over bump)
+        type: string
+        required: false
+        default: ""
+
+# One release at a time, never cancelled: a cancelled release is a commit
+# without its tag, or a tag without its notes.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write # the GitHub release (the push itself uses FLEET_PAT)
+  actions: read # main's CI runs
+  checks: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Only from main
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::A release starts from main, not $GITHUB_REF."
+            exit 1
+          fi
+
+      - name: FLEET_PAT is available
+        env:
+          PAT: ${{ secrets.FLEET_PAT }}
+        run: |
+          if [ -z "$PAT" ]; then
+            echo "::error::FLEET_PAT is not available to this repo. A tag pushed without it starts no workflow, so publish.yml would never run — refusing instead."
+            exit 1
+          fi
+
+      # The commit this run would release is github.sha: main's head when the
+      # run was started. Its CI must have FINISHED green — running is not green,
+      # and no run at all is not green either.
+      - name: Main's CI is green on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          run="$(gh run list --workflow ci.yml --branch main --commit "$SHA" --limit 1 \
+            --json status,conclusion,url --jq '.[0] // empty')"
+          if [ -z "$run" ]; then
+            echo "::error::CI has not run on main at ${SHA:0:7}. Nothing proves this commit works, so it is not released."
+            exit 1
+          fi
+          status="$(jq -r .status <<<"$run")"
+          conclusion="$(jq -r .conclusion <<<"$run")"
+          url="$(jq -r .url <<<"$run")"
+          if [ "$status" != "completed" ]; then
+            echo "::error::CI is still running on ${SHA:0:7} ($url). Start the release again when it finishes."
+            exit 1
+          fi
+          if [ "$conclusion" != "success" ]; then
+            echo "::error::CI on ${SHA:0:7} ended '$conclusion' ($url). Fix main first; a red commit is not released."
+            exit 1
+          fi
+          echo "CI on ${SHA:0:7} is green: $url"
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          token: ${{ secrets.FLEET_PAT }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      # pnpm version comes from "packageManager" in package.json (SSOT).
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Inputs reach the shell as environment variables, never pasted into the
+      # script: a `version` is free text typed by whoever started the run.
+      - name: Decide the version
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+          EXACT: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          next="$(node -e '
+            const cur = require("./package.json").version;
+            const bump = process.env.BUMP, exact = process.env.EXACT.trim().replace(/^v/, "");
+            const parse = (v) => /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(v)?.slice(1).map(Number);
+            const c = parse(cur);
+            if (!c) { console.error(`package.json version "${cur}" is not x.y.z`); process.exit(1); }
+            let n;
+            if (exact) {
+              n = parse(exact);
+              if (!n) { console.error(`"${exact}" is not a version like 0.3.0`); process.exit(1); }
+            } else if (bump === "major") n = [c[0] + 1, 0, 0];
+            else if (bump === "minor") n = [c[0], c[1] + 1, 0];
+            else if (bump === "patch") n = [c[0], c[1], c[2] + 1];
+            else { console.error(`bump must be patch, minor or major, not "${bump}"`); process.exit(1); }
+            const cmp = n[0] - c[0] || n[1] - c[1] || n[2] - c[2];
+            if (cmp <= 0) { console.error(`${n.join(".")} is not newer than ${cur}`); process.exit(1); }
+            console.log(n.join("."));
+          ')"
+          if git rev-parse -q --verify "refs/tags/v$next" >/dev/null \
+            || [ -n "$(git ls-remote --tags origin "refs/tags/v$next")" ]; then
+            echo "::error::v$next is already tagged. Nothing to do — Loki shows it on the next read."
+            exit 1
+          fi
+          echo "next=$next" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$next (package.json was $(node -p 'require("./package.json").version'))."
+
+      - name: Raise the version
+        env:
+          NEXT: ${{ steps.version.outputs.next }}
+        run: npm version "$NEXT" --no-git-tag-version
+
+      # The package's own gate. It rebuilds dist/, which is committed so a
+      # `github:` install needs no build step.
+      - run: pnpm run verify
+
+      - name: Commit, tag and push
+        env:
+          NEXT: ${{ steps.version.outputs.next }}
+        run: |
+          set -euo pipefail
+          # Only the version and the build it implies may change. Anything else
+          # means verify rewrote source, and that is a change to review, not to
+          # release.
+          stray="$(git status --porcelain --untracked-files=all | awk '{print $2}' | grep -v -E '^(package\.json|dist/)' || true)"
+          if [ -n "$stray" ]; then
+            echo "::error::verify changed files outside package.json and dist/: $stray"
+            exit 1
+          fi
+          git config user.name "bitbaum-fleet"
+          git config user.email "fleet@bitbaum.invalid"
+          git add package.json dist
+          git commit -q -m "release v$NEXT"
+          git tag -a "v$NEXT" -m "v$NEXT"
+          # Atomic: the commit and the tag land together or not at all. A main
+          # that moved since this run started refuses the push (not a fast
+          # forward), and the release is simply started again.
+          git push --atomic origin "HEAD:refs/heads/main" "refs/tags/v$NEXT"
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NEXT: ${{ steps.version.outputs.next }}
+        run: |
+          set -euo pipefail
+          gh release create "v$NEXT" --verify-tag --title "v$NEXT" --generate-notes
+          {
+            echo "## Released v$NEXT"
+            echo
+            echo "Install: \`github:$GITHUB_REPOSITORY#v$NEXT\`. Dependabot proposes it to every project that uses this package."
+          } >> "$GITHUB_STEP_SUMMARY"

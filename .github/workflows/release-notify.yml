@@ -1,0 +1,55 @@
+# A release is useful only when the registry and consumers learn about it.
+# No checkout or execution of the completed workflow's code: metadata only.
+name: Notify Fleet of verified release
+
+on:
+  workflow_run:
+    workflows: [CI, Release, Publish]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: release-notify
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event != 'pull_request' && github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Resolve a verified immutable release before requesting reconciliation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          FLEET_TOKEN: ${{ secrets.FLEET_PAT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="$(gh api "repos/$GH_REPO/contents/package.json?ref=$SHA" --jq .content | base64 --decode)"
+          version="$(jq -r .version <<< "$manifest")"
+          if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo 'No stable version; no reconciliation requested.'
+            exit 0
+          fi
+          # Source commits with no matching release tag are not releases.
+          if ! tagged="$(gh api "repos/$GH_REPO/commits/v$version" --jq .sha 2>/dev/null)" || [ "$tagged" != "$SHA" ]; then
+            echo 'This commit is not the versioned release; no reconciliation requested.'
+            exit 0
+          fi
+          ci="$(gh api "repos/$GH_REPO/actions/runs?head_sha=$SHA&per_page=100" --jq '[.workflow_runs[] | select(.path == ".github/workflows/ci.yml" and (.event == "push" or .event == "workflow_dispatch"))] | first | .conclusion')"
+          if [ "$ci" != success ]; then
+            echo 'Release CI is not successful yet; its completion will retry notification.'
+            exit 0
+          fi
+          if [ -z "$FLEET_TOKEN" ]; then
+            echo '::error::FLEET_PAT is required to notify Fleet; scheduled reconciliation remains the fallback.'
+            exit 1
+          fi
+          payload="$(jq -n --arg repository "$GH_REPO" --arg version "$version" --arg commit "$SHA" '{event_type:"shared-package-release",client_payload:{repository:$repository,version:$version,commit:$commit}}')"
+          GH_TOKEN="$FLEET_TOKEN" gh api --method POST repos/bitbaum/fleet/dispatches --input - <<< "$payload"
+          echo "Requested authoritative registry and consumer reconciliation for $GH_REPO v$version ($SHA)." >> "$GITHUB_STEP_SUMMARY"

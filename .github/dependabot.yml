@@ -5,6 +5,12 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # typescript-eslint does not support TypeScript 7 yet (CI: "typescript-eslint
+      # does not support TS 7.0"), so every dev-dependency PR that carries it is red.
+      # Take it when typescript-eslint does.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
     groups:
       dev:
         dependency-type: development

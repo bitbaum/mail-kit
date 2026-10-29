@@ -7,8 +7,8 @@
 #   2. raises the version in package.json (the bump, or the exact version
 #      asked for) — `npm version --no-git-tag-version`, so npm makes no commit
 #      and no tag of its own,
-#   3. runs the package's own `verify`, which rebuilds the committed dist/,
-#   4. commits "release vX.Y.Z" with the rebuilt dist/, tags vX.Y.Z, and pushes
+#   3. runs the package's own `verify`, which rebuilds the configured package outputs,
+#   4. commits "release vX.Y.Z" with tracked build output, tags vX.Y.Z, and pushes
 #      both in one atomic push,
 #   5. creates a GitHub release with generated notes.
 #
@@ -164,8 +164,8 @@ jobs:
           NEXT: ${{ steps.version.outputs.next }}
         run: npm version "$NEXT" --no-git-tag-version
 
-      # The package's own gate. It rebuilds dist/, which is committed so a
-      # `github:` install needs no build step.
+      # The package's own gate. Stage tracked build output only; packages
+      # with ignored output rebuild it during verified publication.
       - run: pnpm run verify
 
       - name: Commit, tag and push
@@ -183,7 +183,12 @@ jobs:
           fi
           git config user.name "bitbaum-fleet"
           git config user.email "fleet@bitbaum.invalid"
-          git add package.json dist
+          git add package.json
+          # Update tracked build output, but respect packages that ignore dist.
+          git ls-files -z -- dist | xargs -0 -r git add -u --
+          if [ -d dist ] && ! git check-ignore --no-index -q dist; then
+            git add -- dist
+          fi
           git commit -q -m "release v$NEXT"
           git tag -a "v$NEXT" -m "v$NEXT"
           # Atomic: the commit and the tag land together or not at all. A main

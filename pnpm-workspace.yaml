@@ -1,0 +1,4 @@
+overrides:
+  # Security floors (2026-10-30 dev-toolchain sweep): stay inside the
+  # major the parents already allow; pnpm does not re-resolve these on update.
+  "vite@8": "^8.2.4"

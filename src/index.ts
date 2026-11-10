@@ -67,6 +67,11 @@ export interface MailMessage {
   cc?: string | string[];
   bcc?: string | string[];
   replyTo?: string;
+  /**
+   * Extra headers. For bulk mail, `listUnsubscribeHeaders()` — a message to
+   * many people without them is filed as spam by Gmail and Yahoo.
+   */
+  headers?: Record<string, string>;
   attachments?: MailAttachment[];
 }
 
@@ -220,6 +225,7 @@ export async function sendMail(
     ...(message.cc ? { cc: toArray(message.cc) } : {}),
     ...(message.bcc ? { bcc: toArray(message.bcc) } : {}),
     ...(replyTo ? { reply_to: replyTo } : {}),
+    ...(message.headers && Object.keys(message.headers).length ? { headers: message.headers } : {}),
     ...(message.attachments?.length
       ? { attachments: message.attachments.map(encodeAttachment) }
       : {}),
@@ -325,3 +331,19 @@ export {
   type MailTriage,
   type MailUrgency,
 } from "./triage.js";
+
+export {
+  escapeHtml,
+  renderMail,
+  type MailBlock,
+  type MailBrand,
+  type MailContent,
+  type MailFooter,
+  type RenderedMail,
+} from "./template.js";
+export {
+  listUnsubscribeHeaders,
+  signUnsubscribe,
+  verifyUnsubscribe,
+  type UnsubscribeSubject,
+} from "./unsubscribe.js";

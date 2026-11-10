@@ -1,7 +1,8 @@
 /**
  * @bitbaum/mail-kit — the fleet's one email layer.
  *
- * One provider (Resend), one env contract, one call shape, across every app.
+ * One call shape across every app, over Resend (the default) or the app's own
+ * mail server (SMTP, chosen explicitly — see smtp.ts).
  * Exists because the fleet grew ~12 bespoke email implementations across three
  * provider styles, and a dead SMTP credential silenced two apps' outbound mail
  * for months without anyone noticing (2026-09-05). Uniformity is the fix:
@@ -9,7 +10,9 @@
  *
  * Design rules:
  * - Zero runtime dependencies: the Resend HTTP API is one POST; an SDK buys
- *   nothing and costs every consumer a dependency.
+ *   nothing and costs every consumer a dependency. SMTP is the exception
+ *   that proves it: nodemailer is an optional peer, loaded only when an app
+ *   chooses SMTP.
  * - `sendMail` NEVER throws. It returns an honest result. A thrown email
  *   error inside a server action reaches nobody and destroys the form
  *   ([refusal-reaches-nobody]); a `{ sent: false }` the caller must look at
@@ -19,9 +22,12 @@
  *   placeholder key delivers to nobody. Both shipped to production once.
  *
  * Env contract (the whole of it):
- * - RESEND_API_KEY      — required for sending.
- * - RESEND_FROM         — sender, either `Name <addr>` or a bare address.
+ * - MAIL_TRANSPORT      — `resend` (default) or `smtp`.
+ * - RESEND_API_KEY      — required for sending through Resend.
+ * - RESEND_FROM         — Resend sender, either `Name <addr>` or a bare address.
  *                         Optional when the app passes `from` per call.
+ * - SMTP_HOST, SMTP_PORT (587), SMTP_SECURE (true on 465), SMTP_USER,
+ *   SMTP_PASS, SMTP_FROM — the app's own mail server, when MAIL_TRANSPORT=smtp.
  * - MAIL_ADDRESS        — the app's own address, `hello@<host>` (address.ts).
  *                         Optional: derived from APP_URL & co. when unset.
  *                         Every message carries it as Reply-To.
@@ -33,6 +39,16 @@
  */
 
 import { appAddressFromEnv } from "./address.js";
+import {
+  smtpConfigFrom,
+  smtpConfigProblem,
+  smtpFailure,
+  smtpTransporter,
+  SmtpUnavailable,
+  type SmtpConfig,
+} from "./smtp.js";
+
+export type MailTransport = "resend" | "smtp";
 
 const RESEND_API_URL = "https://api.resend.com";
 
@@ -76,11 +92,20 @@ export interface MailMessage {
 }
 
 export interface SendOptions {
-  /** Abort the HTTP call after this many ms. Default 15000. */
+  /** Abort the HTTP call (or each SMTP connect/greeting/socket wait) after this many ms. Default 15000. */
   timeoutMs?: number;
+  /** Which way mail leaves. Default: MAIL_TRANSPORT, else `resend`. */
+  transport?: MailTransport;
+  /**
+   * The app's mail server, for apps whose settings live under their own
+   * names (EMAIL_HOST …). Default: SMTP_HOST / SMTP_PORT / SMTP_SECURE /
+   * SMTP_USER / SMTP_PASS.
+   */
+  smtp?: SmtpConfig;
   /**
    * Resend deduplicates sends sharing an idempotency key for 24h — pass one
    * from retry-prone paths (crons, queues) so a retried job can't double-send.
+   * SMTP has no such thing: over SMTP the key is ignored.
    */
   idempotencyKey?: string;
   /** Environment to read config from. Default `process.env`. */
@@ -92,7 +117,7 @@ export type SendResult =
   | {
       sent: false;
       error: string;
-      /** HTTP status when the API answered; absent on network/config errors. */
+      /** HTTP status when Resend answered; absent on network/config errors and over SMTP. */
       status?: number;
       /**
        * True for failures worth retrying later (429 quota/rate limit, 5xx,
@@ -104,6 +129,20 @@ export type SendResult =
 
 function readEnv(env?: Record<string, string | undefined>) {
   return env ?? process.env;
+}
+
+/**
+ * The transport in use: the option, else MAIL_TRANSPORT, else Resend. An
+ * unknown value is not silently Resend — it is reported by `sendMail`.
+ */
+export function mailTransport(
+  env?: Record<string, string | undefined>,
+  override?: MailTransport,
+): MailTransport | undefined {
+  const value = (override ?? readEnv(env)["MAIL_TRANSPORT"] ?? "").trim().toLowerCase();
+  if (value === "" || value === "resend") return "resend";
+  if (value === "smtp") return "smtp";
+  return undefined;
 }
 
 function apiKey(env?: Record<string, string | undefined>): string {
@@ -122,10 +161,15 @@ export function usesSandboxSender(from: string): boolean {
 }
 
 /**
- * The configured sender, or undefined. Per-call `from` beats RESEND_FROM.
+ * The configured sender, or undefined. Per-call `from` beats this. Resend
+ * reads RESEND_FROM; SMTP reads SMTP_FROM (the fleet's shared Resend domain
+ * is not the app's mail server's to send as).
  */
-export function fromAddress(env?: Record<string, string | undefined>): string | undefined {
-  const value = readEnv(env)["RESEND_FROM"]?.trim();
+export function fromAddress(
+  env?: Record<string, string | undefined>,
+  transport: MailTransport = "resend",
+): string | undefined {
+  const value = readEnv(env)[transport === "smtp" ? "SMTP_FROM" : "RESEND_FROM"]?.trim();
   return value ? value : undefined;
 }
 
@@ -149,8 +193,14 @@ export function conventionalFrom(appName: string): string {
  * to nobody. Flows that depend on delivery (password reset, invoices) should
  * check this and fail loudly instead of promising an email that never comes.
  */
-export function isMailConfigured(env?: Record<string, string | undefined>): boolean {
+export function isMailConfigured(
+  env?: Record<string, string | undefined>,
+  options: Pick<SendOptions, "transport" | "smtp"> = {},
+): boolean {
   const e = readEnv(env);
+  const transport = mailTransport(e, options.transport);
+  if (!transport) return false;
+  if (transport === "smtp") return !smtpConfigProblem(smtpConfigFrom(e, options.smtp));
   const key = apiKey(e);
   if (!key || key.startsWith("re_placeholder") || key === "undefined") return false;
   const from = fromAddress(e);
@@ -192,8 +242,19 @@ export async function sendMail(
   options: SendOptions = {},
 ): Promise<SendResult> {
   const env = readEnv(options.env);
+  const transport = mailTransport(env, options.transport);
+  if (!transport) {
+    return {
+      sent: false,
+      error: `MAIL_TRANSPORT must be "resend" or "smtp", not "${env["MAIL_TRANSPORT"]}"`,
+      retryable: false,
+    };
+  }
 
-  if (!isMailConfigured(env)) {
+  if (transport === "smtp") {
+    const problem = smtpConfigProblem(smtpConfigFrom(env, options.smtp));
+    if (problem) return { sent: false, error: problem, retryable: false };
+  } else if (!isMailConfigured(env)) {
     return {
       sent: false,
       error: apiKey(env)
@@ -203,9 +264,13 @@ export async function sendMail(
     };
   }
 
-  const from = message.from ?? fromAddress(env);
+  const from = message.from ?? fromAddress(env, transport);
   if (!from) {
-    return { sent: false, error: "No sender: set RESEND_FROM or pass `from`", retryable: false };
+    return {
+      sent: false,
+      error: `No sender: set ${transport === "smtp" ? "SMTP_FROM" : "RESEND_FROM"} or pass \`from\``,
+      retryable: false,
+    };
   }
   if (!message.html && !message.text) {
     return { sent: false, error: "Message needs html and/or text", retryable: false };
@@ -215,6 +280,10 @@ export async function sendMail(
   // one, or the message already comes from it.
   const own = appAddressFromEnv(env);
   const replyTo = message.replyTo ?? (own && bareAddress(from) !== own ? own : undefined);
+
+  if (transport === "smtp") {
+    return sendOverSmtp(message, from, replyTo, smtpConfigFrom(env, options.smtp)!, options);
+  }
 
   const body = {
     from,
@@ -270,6 +339,57 @@ export async function sendMail(
   return { sent: true, id: payload.id };
 }
 
+async function sendOverSmtp(
+  message: MailMessage,
+  from: string,
+  replyTo: string | undefined,
+  config: SmtpConfig,
+  options: SendOptions,
+): Promise<SendResult> {
+  try {
+    const transporter = await smtpTransporter(config, options.timeoutMs ?? 15_000);
+    const info = await transporter.sendMail({
+      from,
+      to: toArray(message.to),
+      subject: message.subject,
+      ...(message.html ? { html: message.html } : {}),
+      ...(message.text ? { text: message.text } : {}),
+      ...(message.cc ? { cc: toArray(message.cc) } : {}),
+      ...(message.bcc ? { bcc: toArray(message.bcc) } : {}),
+      ...(replyTo ? { replyTo } : {}),
+      ...(message.headers && Object.keys(message.headers).length
+        ? { headers: message.headers }
+        : {}),
+      ...(message.attachments?.length
+        ? {
+            attachments: message.attachments.map((a) => ({
+              filename: a.filename,
+              // A string is already base64 (the MailAttachment contract).
+              content: typeof a.content === "string" ? a.content : Buffer.from(a.content),
+              ...(typeof a.content === "string" ? { encoding: "base64" } : {}),
+              ...(a.contentType ? { contentType: a.contentType } : {}),
+            })),
+          }
+        : {}),
+    });
+    if (!info.accepted?.length) {
+      // The server took the connection but no recipient: nothing went out.
+      return { sent: false, error: "SMTP server accepted no recipient", retryable: false };
+    }
+    if (!info.messageId) {
+      return { sent: false, error: "SMTP send returned no message id", retryable: true };
+    }
+    // NOTE: 250 from a relay is a handoff, not delivery — a relay can accept
+    // mail from a sender domain it has not authenticated and drop it later.
+    return { sent: true, id: info.messageId };
+  } catch (error) {
+    if (error instanceof SmtpUnavailable) {
+      return { sent: false, error: error.message, retryable: false };
+    }
+    return { sent: false, ...smtpFailure(error) };
+  }
+}
+
 export interface MailHealth {
   ok: boolean;
   error?: string;
@@ -285,8 +405,21 @@ export interface MailHealth {
  */
 export async function mailHealth(options: SendOptions = {}): Promise<MailHealth> {
   const env = readEnv(options.env);
-  if (!isMailConfigured(env)) {
+  if (!isMailConfigured(env, options)) {
     return { ok: false, error: "not configured" };
+  }
+  if (mailTransport(env, options.transport) === "smtp") {
+    // Connect, TLS and log in, without sending. Proves the credential, not delivery.
+    try {
+      const transporter = await smtpTransporter(
+        smtpConfigFrom(env, options.smtp)!,
+        options.timeoutMs ?? 15_000,
+      );
+      await transporter.verify();
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
   }
   let response: Response;
   try {
@@ -309,6 +442,7 @@ export async function mailHealth(options: SendOptions = {}): Promise<MailHealth>
   };
 }
 
+export { smtpConfigFrom, type SmtpConfig } from "./smtp.js";
 export { APP_MAILBOX, appAddress, appAddressFromEnv, hostOf, isAddressFor } from "./address.js";
 export {
   INBOUND_PATH,

@@ -5,6 +5,12 @@ linked below. Git commit dates are source dates, not inferred npm publication
 dates. A GitHub release does not itself establish npm publication.
 Application adoption and deployment evidence are tracked separately.
 
+## 0.4.0
+
+- SMTP transport alongside Resend: `MAIL_TRANSPORT=smtp` (or `{ transport: "smtp" }`) sends through the app's own mail server, configured by `SMTP_HOST`/`SMTP_PORT`/`SMTP_SECURE`/`SMTP_USER`/`SMTP_PASS`/`SMTP_FROM` or `{ smtp: {...} }`. Resend stays the default; SMTP is never chosen implicitly.
+- `nodemailer` is an optional peer dependency, loaded only when SMTP is chosen. Resend-only apps install nothing new.
+- `isMailConfigured`, `mailHealth` and `fromAddress` are transport-aware; new `mailTransport()` and `smtpConfigFrom()`.
+
 ## 0.3.0
 
 - `renderMail(brand, content)`: one HTML layout for the fleet (extracted from OrangeCat's, made brandable) with dark mode, an Outlook button, a plain-text twin and a required footer. Content is plain text and escaped.

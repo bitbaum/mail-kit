@@ -174,3 +174,26 @@ describe("triage", () => {
     });
   });
 });
+
+describe("headers", () => {
+  it("passes extra headers to Resend", async () => {
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ id: "e_1" }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await sendMail(
+      {
+        to: "a@example.org",
+        subject: "s",
+        text: "t",
+        headers: { "List-Unsubscribe": "<https://x.example/u>" },
+      },
+      { env: { RESEND_API_KEY: "re_live_abc", RESEND_FROM: "App <app@fleetcrown.orangecat.ch>" } },
+    );
+    expect(result).toEqual({ sent: true, id: "e_1" });
+    const sent = JSON.parse(
+      (fetchMock.mock.calls[0] as unknown as [string, { body: string }])[1].body,
+    );
+    expect(sent.headers).toEqual({ "List-Unsubscribe": "<https://x.example/u>" });
+  });
+});

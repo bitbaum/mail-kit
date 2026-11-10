@@ -5,6 +5,12 @@ linked below. Git commit dates are source dates, not inferred npm publication
 dates. A GitHub release does not itself establish npm publication.
 Application adoption and deployment evidence are tracked separately.
 
+## 0.3.0
+
+- `renderMail(brand, content)`: one HTML layout for the fleet (extracted from OrangeCat's, made brandable) with dark mode, an Outlook button, a plain-text twin and a required footer. Content is plain text and escaped.
+- `signUnsubscribe` / `verifyUnsubscribe` / `listUnsubscribeHeaders`: signed one-click unsubscribe (RFC 8058).
+- `sendMail` takes `headers`.
+
 ## 0.2.0
 
 - [Tagged source `v0.2.0`](https://github.com/bitbaum/mail-kit/tree/2086b4acaf9368442e1f357fce36ce0ce8bd43cd)

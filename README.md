@@ -43,6 +43,46 @@ if (!result.sent) {
 - **`options.idempotencyKey`** — pass from crons/queues so a retried job
   cannot double-send (Resend dedupes for 24h).
 
+## One layout for every email: `renderMail`
+
+An app supplies a **brand** and **content**; the layout, dark mode, Outlook
+button, plain-text twin and footer rules live here, once.
+
+```ts
+import { renderMail, sendMail, listUnsubscribeHeaders, signUnsubscribe } from "@bitbaum/mail-kit";
+
+const brand = { name: "Heidi", url: "https://heidi.orangecat.ch", accent: "#d9232d", onAccent: "#ffffff", accentDark: "#ff5a62" };
+
+const { html, text } = renderMail(brand, {
+  lang: "de-CH",
+  preheader: "Kurz bevor Sie es vergessen würden: 8 Fragen, etwa 3 Minuten.",
+  heading: "Heute sind **8 Fragen** fällig",
+  blocks: [
+    { type: "paragraph", text: "Drei Minuten jetzt, und sie bleiben ein paar Tage länger." },
+    { type: "stats", items: [{ value: "8", label: "fällig" }, { value: "3", label: "Tage in Folge" }] },
+    { type: "button", label: "Jetzt üben", url: "https://heidi.orangecat.ch/practice" },
+  ],
+  footer: {
+    reason: "Sie bekommen das, weil Sie Erinnerungen eingeschaltet haben.",
+    unsubscribe: { label: "Nicht mehr erinnern", url: unsubscribeUrl },
+    preferences: { label: "Einstellungen", url: settingsUrl },
+  },
+});
+
+await sendMail({ to, subject, html, text, headers: listUnsubscribeHeaders(unsubscribeUrl) });
+```
+
+- **Content is plain text.** Every string is escaped; the only markup is `**bold**`. A link that is not `http(s)`/`mailto` throws.
+- **Blocks:** `paragraph`, `button`, `link`, `code`, `stats`, `list`, `quote`, `note`.
+- **Dark mode** follows the reader's client (`prefers-color-scheme`); give `accentDark` if your accent is too dark to read on black.
+- **The footer is a required key.** `reason` is always said. `unsubscribe` is `{label, url}` or `null`, and `null` is only for mail the person asked for this minute (a sign-in link).
+- **System fonts**, deliberately: webfonts fail in most mail clients.
+- **Logo:** `brand.logoUrl` must be a PNG (≥2× its shown 28px height); SVG does not render in Gmail or Outlook.
+
+### Unsubscribe that people do not hate
+
+`signUnsubscribe(secret, {user, list})` / `verifyUnsubscribe` make a signed, non-expiring token for a link that works without signing in. `listUnsubscribeHeaders(url)` adds `List-Unsubscribe` + `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (RFC 8058), which Gmail and Yahoo require for bulk senders. The URL must act on a POST without a page, a login or a confirmation.
+
 ## One address per app: `hello@<host>`
 
 Every app has one address, on its own host, that a customer can guess:

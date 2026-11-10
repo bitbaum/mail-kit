@@ -1,7 +1,7 @@
 {
   "name": "@bitbaum/mail-kit",
   "version": "0.3.0",
-  "description": "The fleet's one email layer: Resend over raw fetch, one HTML layout with dark mode and a plain-text twin, signed one-click unsubscribe, zero dependencies, honest never-throwing results, sandbox/placeholder guards, and the shared-sender convention encoded once.",
+  "description": "The fleet's one email layer: Resend over raw fetch by default, or the app's own mail server over SMTP, one HTML layout with dark mode and a plain-text twin, signed one-click unsubscribe, honest never-throwing results, sandbox/placeholder guards, and the shared-sender convention encoded once.",
   "license": "MIT",
   "author": "Mao Nakamoto",
   "homepage": "https://github.com/bitbaum/mail-kit#readme",
@@ -15,6 +15,7 @@
   "keywords": [
     "email",
     "resend",
+    "smtp",
     "transactional",
     "mail",
     "never-throw"
@@ -53,11 +54,21 @@
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
+  "peerDependencies": {
+    "nodemailer": ">=6.9.0"
+  },
+  "peerDependenciesMeta": {
+    "nodemailer": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.4.0",
+    "@types/nodemailer": "^8.0.2",
     "eslint": "^10.9.1",
     "globals": "^17.11.0",
+    "nodemailer": "^10.4.0",
     "prettier": "3.9.6",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.68.0",

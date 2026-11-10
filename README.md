@@ -1,7 +1,8 @@
 # @bitbaum/mail-kit
 
-The fleet's **one** email layer. One provider (Resend), one env contract, one
-call shape, zero runtime dependencies.
+The fleet's **one** email layer. One env contract, one call shape, over
+**Resend** (the default) or **the app's own mail server (SMTP)**. Zero runtime
+dependencies for Resend; SMTP uses `nodemailer`, an optional peer.
 
 Exists because the fleet grew ~12 bespoke email implementations across three
 provider styles, and a dead SMTP credential silenced two apps' outbound mail
@@ -42,6 +43,56 @@ if (!result.sent) {
   A passing probe does not prove delivery; only a real send does.
 - **`options.idempotencyKey`** — pass from crons/queues so a retried job
   cannot double-send (Resend dedupes for 24h).
+
+## Resend or the app's own mail server
+
+Resend is an HTTP email service: one API key, the fleet's shared verified
+domain. SMTP is the standard protocol for handing mail to a mail server, so an
+app that already sends through its own server keeps doing exactly that.
+
+Resend stays the default. SMTP is chosen explicitly, never guessed from which
+variables happen to be set:
+
+```bash
+MAIL_TRANSPORT=smtp
+SMTP_HOST=mail.example.ch
+SMTP_PORT=587          # default 587 (STARTTLS); 465 means implicit TLS
+SMTP_SECURE=           # optional; defaults to true on 465, false otherwise
+SMTP_USER=app@example.ch
+SMTP_PASS=…            # USER and PASS together, or neither
+SMTP_FROM="App <app@example.ch>"
+```
+
+```bash
+pnpm add nodemailer    # only apps that choose SMTP
+```
+
+An app whose settings already live under other names passes them instead of
+renaming its env:
+
+```ts
+await sendMail(message, {
+  transport: "smtp",
+  smtp: { host: process.env.EMAIL_HOST!, port: Number(process.env.EMAIL_PORT), user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
+});
+```
+
+The call, `isMailConfigured`, `mailHealth` and the result shape are the same
+for both. What differs, honestly:
+
+- **Sender:** SMTP reads `SMTP_FROM`, not `RESEND_FROM` — the shared Resend
+  domain is not your mail server's to send as. `conventionalFrom()` is a Resend
+  convention.
+- **Result:** `{ sent: true, id }` carries the SMTP Message-ID. A server that
+  accepts no recipient is `sent: false`. A 4xx reply or a dropped connection
+  is `retryable: true`; a 5xx reply or a refused login is not. `status` is an
+  HTTP status, so it is absent over SMTP; the reply code is in `error`.
+- **`idempotencyKey`** has no SMTP equivalent and is ignored there.
+- **`mailHealth()`** logs in without sending (no domain list).
+- **Accepted is not delivered.** A relay can answer `250` and drop mail from a
+  sender domain it has not authenticated. Check the sender domain's SPF/DKIM.
+- **nodemailer missing** → `{ sent: false, error: "SMTP transport needs the
+  nodemailer package…" }`. The import carries `webpackIgnore`/`turbopackIgnore`, so bundlers leave it to Node at send time instead of failing the build of a Resend-only app.
 
 ## One layout for every email: `renderMail`
 
@@ -122,8 +173,10 @@ inside an email are described, never followed.
 
 | Var                   | Meaning                                                                       |
 | --------------------- | ----------------------------------------------------------------------------- |
-| `RESEND_API_KEY`      | required to send (a fleet key: `/opt/fleet/env`)                              |
+| `MAIL_TRANSPORT`      | `resend` (default) or `smtp`                                                  |
+| `RESEND_API_KEY`      | required to send through Resend (a fleet key: `/opt/fleet/env`)               |
 | `RESEND_FROM`         | sender — `Name <addr>` or bare address (optional if every call passes `from`) |
+| `SMTP_HOST` …         | `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` — only with `MAIL_TRANSPORT=smtp` |
 | `MAIL_ADDRESS`        | the app's own address; optional, derived from the app's URL                   |
 | `MAIL_INBOUND_SECRET` | verifies mail from the gateway (a fleet key: `/opt/fleet/env`)                |
 

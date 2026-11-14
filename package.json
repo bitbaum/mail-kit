@@ -64,14 +64,14 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/node": "^26.4.0",
+    "@types/node": "^26.6.6",
     "@types/nodemailer": "^8.0.2",
-    "eslint": "^10.9.1",
-    "globals": "^17.11.0",
+    "eslint": "^10.14.0",
+    "globals": "^17.14.0",
     "nodemailer": "^10.4.0",
-    "prettier": "3.9.6",
+    "prettier": "3.9.10",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.68.0",
-    "vitest": "^4.1.0"
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^5.1.0"
   }
 }
